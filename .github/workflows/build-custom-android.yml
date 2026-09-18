@@ -1,0 +1,82 @@
+name: Build Custom Immich APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - custom
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-immich-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PR_NUMBER: "99999"
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Mise
+        uses: immich-app/devtools/actions/use-mise@06a9ef925332c91be647d6256642b86b398592c8 # use-mise-action-v3.2.1
+        with:
+          github_token: ${{ github.token }}
+          working_directory: ./mobile
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: ""
+
+      - name: Install mobile dependencies
+        run: mise //mobile:install:ci
+
+      - name: Generate mobile code
+        run: mise //mobile:codegen
+
+      - name: Restore signing key
+        env:
+          CUSTOM_KEY_JKS: ${{ secrets.CUSTOM_KEY_JKS }}
+        run: |
+          umask 077
+          printf '%s' "$CUSTOM_KEY_JKS" \
+            | base64 --decode \
+            > mobile/android/key.jks
+          test -s mobile/android/key.jks
+
+      - name: Build release APK
+        working-directory: ./mobile
+        env:
+          ALIAS: ${{ secrets.CUSTOM_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.CUSTOM_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.CUSTOM_STORE_PASSWORD }}
+        run: flutter build apk --release
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f mobile/android/key.jks
+
+      - name: Upload APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: immich-custom-apk
+          path: mobile/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 3
