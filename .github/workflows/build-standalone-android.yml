@@ -93,36 +93,30 @@ jobs:
       - name: Generate mobile code
         run: mise //mobile:codegen
 
-      # A dedicated signing key permits future APK updates without uninstalling.
-      # When the secrets are absent, the existing Gradle config uses a
-      # temporary debug key; that mode is for first-run testing only.
-      - name: Configure optional persistent signing
+      # Require the pre-existing fork signing secrets so every build can update
+      # the previously installed APK with the same signing certificate.
+      - name: Configure persistent signing
         shell: bash
         env:
-          KEY_JKS: ${{ secrets.KEY_JKS }}
-          ALIAS: ${{ secrets.ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_JKS: ${{ secrets.CUSTOM_KEY_JKS }}
+          ALIAS: ${{ secrets.CUSTOM_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.CUSTOM_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.CUSTOM_STORE_PASSWORD }}
         run: |
-          if [[ -n "$KEY_JKS" ]]; then
-            if [[ -z "$ALIAS" || -z "$ANDROID_KEY_PASSWORD" || -z "$ANDROID_STORE_PASSWORD" ]]; then
-              echo "::error::KEY_JKS requires ALIAS, ANDROID_KEY_PASSWORD, and ANDROID_STORE_PASSWORD secrets."
-              exit 1
-            fi
-            printf '%s' "$KEY_JKS" | base64 --decode > mobile/android/key.jks
-            test -s mobile/android/key.jks
-            echo "Persistent release signing configured." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::No KEY_JKS secret: using ephemeral debug signing. Reinstall may be needed for subsequent builds."
-            echo "Signed with runner-local debug key (not suitable for reliable updates)." >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z "$KEY_JKS" || -z "$ALIAS" || -z "$ANDROID_KEY_PASSWORD" || -z "$ANDROID_STORE_PASSWORD" ]]; then
+            echo "::error::All four CUSTOM_* Android signing secrets must be configured."
+            exit 1
           fi
+          printf '%s' "$KEY_JKS" | base64 --decode > mobile/android/key.jks
+          test -s mobile/android/key.jks
+          echo "Persistent release signing configured." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build release APK
         working-directory: mobile
         env:
-          ALIAS: ${{ secrets.ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.CUSTOM_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.CUSTOM_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.CUSTOM_STORE_PASSWORD }}
         run: flutter build apk --release
 
       - name: Upload Android APK

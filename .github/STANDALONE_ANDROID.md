@@ -34,23 +34,21 @@ compatible with your Immich server, or pin an appropriate upstream tag.
 
 ## Signing and updates
 
-When no GitHub Actions signing secrets are configured, Gradle signs the
-release APK with the runner's **temporary debug key**. This is sufficient
-for a one-off test but does not provide a stable upgrade path. A later
-build may require uninstalling the previous standalone app, and app data
-will be lost on uninstall. It does not affect the separately installed
-official Immich app.
-
-For reliable in-place APK updates, create a private signing keystore once
-on a trusted local machine, back it up securely, and add these values under
+The workflow requires a stable Android signing keystore for reliable APK
+updates. It reads the existing repository secrets under
 **Settings > Secrets and variables > Actions > Repository secrets**:
 
-- `KEY_JKS`: entire keystore file encoded as Base64 (single line).
-- `ALIAS`: key alias.
-- `ANDROID_KEY_PASSWORD`: password for the key.
-- `ANDROID_STORE_PASSWORD`: password for the keystore.
+- `CUSTOM_KEY_JKS`: entire keystore file encoded as Base64 (single line).
+- `CUSTOM_KEY_ALIAS`: key alias.
+- `CUSTOM_KEY_PASSWORD`: password for the key.
+- `CUSTOM_STORE_PASSWORD`: password for the keystore.
 
-For example, generate a new keystore locally:
+These four secrets must all be configured. If any are missing, the workflow
+fails instead of silently using an ephemeral debug key. Keep using the same
+keystore for subsequent builds, or Android will refuse to update the app
+without first uninstalling it (which deletes its local app data).
+
+If setting up signing for the first time, generate a new keystore locally:
 
 ```bash
 keytool -genkeypair -v \
@@ -74,9 +72,8 @@ On Windows PowerShell:
 
 Do not commit the keystore, the Base64 value, or passwords. Keep a secure
 backup of the original keystore and its passwords. Use **the same keystore**
-for all subsequent builds. Set these secrets before installing the APK you
-intend to keep long term, otherwise the initial debug-signed app will need
-to be uninstalled once.
+for all subsequent builds. Do not replace an existing signing keystore if you intend to update already
+installed APKs in place. Store the four secrets before running the workflow.
 
 ## Important limitations
 
