@@ -1,0 +1,134 @@
+name: Build standalone Immich Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Source repository to build"
+        required: true
+        type: choice
+        default: upstream
+        options:
+          - upstream
+          - fork
+      upstream_ref:
+        description: "Upstream branch, tag, or commit (used for upstream only)"
+        required: true
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-immich-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.source == 'upstream' && 'immich-app/immich' || github.repository }}
+          ref: ${{ inputs.source == 'upstream' && inputs.upstream_ref || 'main' }}
+          persist-credentials: false
+
+      - name: Record source revision
+        id: source
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Building ${{ inputs.source }} at $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      # Keep upstream files unchanged in Git: only patch the CI working tree.
+      - name: Set separate Android package and display name
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gradle = Path("mobile/android/app/build.gradle")
+          source = gradle.read_text(encoding="utf-8")
+          replacements = {
+              '    applicationId "app.alextran.immich"':
+                  '    applicationId "app.alextran.immich.fork"',
+              '    resValue "string", "app_name", "Immich"':
+                  '    resValue "string", "app_name", "Immich Fork"',
+          }
+          for old, new in replacements.items():
+              if source.count(old) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one occurrence in {gradle}: {old}"
+                  )
+              source = source.replace(old, new, 1)
+          gradle.write_text(source, encoding="utf-8")
+          print("Configured app.alextran.immich.fork / Immich Fork")
+          PY
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ""
+
+      - name: Install toolchain with mise
+        uses: jdx/mise-action@v5
+        with:
+          working_directory: mobile
+          monorepo: true
+
+      - name: Install Flutter dependencies
+        run: mise //mobile:install:ci
+
+      - name: Generate mobile code
+        run: mise //mobile:codegen
+
+      # A dedicated signing key permits future APK updates without uninstalling.
+      # When the secrets are absent, the existing Gradle config uses a
+      # temporary debug key; that mode is for first-run testing only.
+      - name: Configure optional persistent signing
+        shell: bash
+        env:
+          KEY_JKS: ${{ secrets.KEY_JKS }}
+          ALIAS: ${{ secrets.ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          if [[ -n "$KEY_JKS" ]]; then
+            if [[ -z "$ALIAS" || -z "$ANDROID_KEY_PASSWORD" || -z "$ANDROID_STORE_PASSWORD" ]]; then
+              echo "::error::KEY_JKS requires ALIAS, ANDROID_KEY_PASSWORD, and ANDROID_STORE_PASSWORD secrets."
+              exit 1
+            fi
+            printf '%s' "$KEY_JKS" | base64 --decode > mobile/android/key.jks
+            test -s mobile/android/key.jks
+            echo "Persistent release signing configured." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::No KEY_JKS secret: using ephemeral debug signing. Reinstall may be needed for subsequent builds."
+            echo "Signed with runner-local debug key (not suitable for reliable updates)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build release APK
+        working-directory: mobile
+        env:
+          ALIAS: ${{ secrets.ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: flutter build apk --release
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: immich-fork-apk-${{ steps.source.outputs.sha }}
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
